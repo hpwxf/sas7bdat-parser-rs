@@ -1,6 +1,6 @@
 use crate::CompressionCodec;
 use crate::catalog::{Catalog, LabelSet};
-use crate::sas_metadata::{DatasetMetaJson, PARQUET_METADATA_KEY};
+use crate::sas_metadata::{DatasetMetaJson, PARQUET_ADDITIONAL_METADATA_KEY, PARQUET_METADATA_KEY};
 use anyhow::Result;
 use arrow_schema::{DataType, Field, Fields, Schema, SchemaRef};
 use chrono::{Duration, NaiveDate, NaiveDateTime};
@@ -294,6 +294,9 @@ pub struct WriteOptions<'a> {
     pub catalog: Option<&'a Catalog>,
     /// Embed SAS dataset/column metadata into the Parquet file's key-value metadata.
     pub embed_metadata: bool,
+    /// A string stored verbatim in the Parquet file's key-value metadata under
+    /// `sas7bdat.additional`. Not parsed or validated: the caller owns its content.
+    pub additional_metadata: Option<&'a str>,
     /// Compression codec for the written Parquet data.
     pub compression: Compression,
 }
@@ -314,6 +317,7 @@ impl WriteOptions<'_> {
             },
             catalog: None,
             embed_metadata: false,
+            additional_metadata: None,
             compression: Compression::UNCOMPRESSED,
         }
     }
@@ -378,6 +382,12 @@ pub fn write_parquet(dataset: &Dataset, output: &Path, options: WriteOptions<'_>
         // Recorded on the file writer, so it survives the handover below.
         let json = sas_metadata_json(dataset, options.scan.projection)?;
         writer.append_key_value_metadata(KeyValue::new(PARQUET_METADATA_KEY.to_string(), json));
+    }
+    if let Some(additional) = options.additional_metadata {
+        writer.append_key_value_metadata(KeyValue::new(
+            PARQUET_ADDITIONAL_METADATA_KEY.to_string(),
+            additional.to_string(),
+        ));
     }
 
     // `ArrowWriter::write` encodes on the calling thread, which leaves the conversion running

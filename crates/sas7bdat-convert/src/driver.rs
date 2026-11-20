@@ -65,6 +65,9 @@ pub struct ConvertOptions {
     pub parquet_target_bytes: Option<usize>,
     /// Embed SAS labels, formats, kinds and widths in the Parquet key-value metadata.
     pub parquet_metadata: bool,
+    /// A string stored verbatim in the Parquet key-value metadata under
+    /// `sas7bdat.additional`, independently of `parquet_metadata`. Parquet only.
+    pub parquet_metadata_additional: Option<String>,
     /// Delimiter for CSV/TSV. `None` uses the sink's default.
     pub delimiter: Option<u8>,
     /// Omit the header row from CSV/TSV.
@@ -97,6 +100,7 @@ impl Default for ConvertOptions {
             parquet_row_group_rows: None,
             parquet_target_bytes: None,
             parquet_metadata: false,
+            parquet_metadata_additional: None,
             delimiter: None,
             no_header: false,
             skip: None,
@@ -296,6 +300,7 @@ fn write_output(
                     scan,
                     catalog,
                     embed_metadata: options.parquet_metadata,
+                    additional_metadata: options.parquet_metadata_additional.as_deref(),
                     compression: resolve_compression(options.compression),
                 },
             )

@@ -1,5 +1,7 @@
 //! End to end: `parquet_metadata` writes the SAS metadata into the Parquet file's
-//! key-value metadata under `sas7bdat.metadata`, and leaves the file alone without it.
+//! key-value metadata under `sas7bdat.metadata`, `parquet_metadata_additional` stores a
+//! caller's string verbatim under `sas7bdat.additional`, and without them the file has
+//! neither key.
 //!
 //! The unit tests in `sas_metadata.rs` cover the JSON shape of one column. These cover what
 //! a reader of the written file sees: the key is there (or not), the JSON describes the
@@ -7,7 +9,7 @@
 
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use sas7bdat::Dataset;
-use sas7bdat_convert::sas_metadata::PARQUET_METADATA_KEY;
+use sas7bdat_convert::sas_metadata::{PARQUET_ADDITIONAL_METADATA_KEY, PARQUET_METADATA_KEY};
 use sas7bdat_convert::{ConvertOptions, NoObserver, convert_file};
 use serde_json::Value;
 use std::fs::File;
@@ -24,14 +26,53 @@ fn convert(input: &Path, output: &Path, options: &ConvertOptions) {
     convert_file(root, input, Some(output), options, None, &NoObserver).expect("convert");
 }
 
-/// The value stored under [`PARQUET_METADATA_KEY`], if any.
-fn sas_metadata(parquet: &Path) -> Option<Value> {
+/// Every value stored under `key` in the file's key-value metadata, in footer order.
+fn kv_values(parquet: &Path, key: &str) -> Vec<Option<String>> {
     let reader = SerializedFileReader::new(File::open(parquet).expect("open parquet"))
         .expect("read parquet footer");
-    let kv = reader.metadata().file_metadata().key_value_metadata()?;
-    let entry = kv.iter().find(|kv| kv.key == PARQUET_METADATA_KEY)?;
-    let json = entry.value.as_deref().expect("metadata value is set");
-    Some(serde_json::from_str(json).expect("metadata value is JSON"))
+    reader
+        .metadata()
+        .file_metadata()
+        .key_value_metadata()
+        .map(|kv| {
+            kv.iter()
+                .filter(|kv| kv.key == key)
+                .map(|kv| kv.value.clone())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The value stored under [`PARQUET_METADATA_KEY`], if any.
+fn sas_metadata(parquet: &Path) -> Option<Value> {
+    let values = kv_values(parquet, PARQUET_METADATA_KEY);
+    assert!(
+        values.len() <= 1,
+        "at most one {PARQUET_METADATA_KEY} entry"
+    );
+    let json = values.into_iter().next()?.expect("metadata value is set");
+    Some(serde_json::from_str(&json).expect("metadata value is JSON"))
+}
+
+/// The value stored under [`PARQUET_ADDITIONAL_METADATA_KEY`], if any.
+fn additional_metadata(parquet: &Path) -> Option<String> {
+    let values = kv_values(parquet, PARQUET_ADDITIONAL_METADATA_KEY);
+    assert!(
+        values.len() <= 1,
+        "at most one {PARQUET_ADDITIONAL_METADATA_KEY} entry"
+    );
+    Some(values.into_iter().next()?.expect("additional value is set"))
+}
+
+fn convert_with_additional(additional: &str, parquet_metadata: bool) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let options = ConvertOptions {
+        parquet_metadata,
+        parquet_metadata_additional: Some(additional.to_owned()),
+        ..ConvertOptions::default()
+    };
+    convert(&fixture(), &dir.path().join("out.parquet"), &options);
+    dir
 }
 
 fn opt_str(value: Option<&String>) -> Value {
@@ -102,6 +143,56 @@ fn omits_the_key_by_default() {
         sas_metadata(&output).is_none(),
         "no sas7bdat.metadata key without parquet_metadata"
     );
+    assert!(
+        additional_metadata(&output).is_none(),
+        "no sas7bdat.additional key without parquet_metadata_additional"
+    );
+}
+
+#[test]
+fn stores_the_additional_string_verbatim() {
+    // Not JSON-normalised: spacing, key order, escapes and non-ASCII text survive as given.
+    let additional = r#"{"id": 101, "nom": "Dupont", "prénom": "Élodie", "actif": true, "roles": ["admin", "éditeur"], "note": "il a dit \"oui\" ; 'non'"}"#;
+    let dir = convert_with_additional(additional, false);
+    let output = dir.path().join("out.parquet");
+
+    assert_eq!(additional_metadata(&output).as_deref(), Some(additional));
+    assert!(
+        sas_metadata(&output).is_none(),
+        "parquet_metadata_additional does not imply parquet_metadata"
+    );
+}
+
+#[test]
+fn stores_a_string_that_is_not_json() {
+    let additional = "  libre, pas du JSON {  ";
+    let dir = convert_with_additional(additional, false);
+    assert_eq!(
+        additional_metadata(&dir.path().join("out.parquet")).as_deref(),
+        Some(additional)
+    );
+}
+
+#[test]
+fn stores_an_empty_string() {
+    let dir = convert_with_additional("", false);
+    assert_eq!(
+        additional_metadata(&dir.path().join("out.parquet")).as_deref(),
+        Some("")
+    );
+}
+
+#[test]
+fn keeps_both_keys_when_both_are_asked_for() {
+    let additional = r#"{"id": 101}"#;
+    let dir = convert_with_additional(additional, true);
+    let output = dir.path().join("out.parquet");
+
+    assert_eq!(additional_metadata(&output).as_deref(), Some(additional));
+    let json = sas_metadata(&output).expect("sas7bdat.metadata key is present");
+    let ds = Dataset::open(fixture()).expect("open dataset");
+    assert_eq!(json["row_count"], ds.metadata().row_count);
+    assert_eq!(json["column_count"], ds.columns().len());
 }
 
 #[test]
