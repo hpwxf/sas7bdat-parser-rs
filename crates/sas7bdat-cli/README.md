@@ -40,6 +40,22 @@ sas7bdat completions zsh           # shell completion script
 
 Run `sas7bdat <command> --help` for the full options of a command.
 
+### Metadata in the Parquet file
+
+Two opt-in flags of `convert` write entries into the Parquet file's key-value
+metadata, where plain Parquet readers can find them without the original file:
+
+- `--parquet-metadata` stores the SAS labels, formats, kinds and widths as JSON
+  under `sas7bdat.metadata`.
+- `--parquet-metadata-additional STRING` stores `STRING` as given, not parsed or
+  validated, under `sas7bdat.additional`: a small tag of your own, typically JSON.
+
+```sh
+sas7bdat convert sales.sas7bdat --out-dir out --parquet-metadata \
+  --parquet-metadata-additional '{"id": 101, "roles": ["admin", "editor"]}'
+duckdb -c "SELECT decode(key), decode(value) FROM parquet_kv_metadata('out/sales.parquet')"
+```
+
 ## Related packages
 
 - [`sas7bdat-polars`](https://pypi.org/project/sas7bdat-polars/): a Polars plugin

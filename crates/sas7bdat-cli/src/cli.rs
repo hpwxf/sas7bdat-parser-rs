@@ -209,6 +209,15 @@ pub struct OutputOptions {
     #[arg(long, help_heading = "Output")]
     pub parquet_metadata: bool,
 
+    /// Store STRING verbatim in the Parquet file's key-value metadata under the
+    /// `sas7bdat.additional` key.
+    ///
+    /// Meant for a small free-form tag, typically JSON. It is not parsed or validated, and
+    /// is independent of `--parquet-metadata`. Every Parquet file of the run gets the same
+    /// string. Parquet output only.
+    #[arg(long, value_name = "STRING", help_heading = "Output")]
+    pub parquet_metadata_additional: Option<String>,
+
     /// Parquet row group size, in rows.
     #[arg(
         long,
@@ -564,6 +573,7 @@ mod tests {
             overwrite: false,
             tmp_dir: None,
             parquet_metadata: false,
+            parquet_metadata_additional: None,
             parquet_row_group_size: None,
             parquet_target_bytes: None,
         }
