@@ -56,6 +56,19 @@ sas7bdat convert sales.sas7bdat --out-dir out --parquet-metadata \
 duckdb -c "SELECT decode(key), decode(value) FROM parquet_kv_metadata('out/sales.parquet')"
 ```
 
+### TIME columns
+
+SAS stores a time as signed seconds since midnight with no upper bound, so a TIME
+column can hold durations and negative offsets as well as clock times.
+`convert --time-mode` picks how such a column is written, in every format:
+
+| Mode | Parquet (as DuckDB reads it) | CSV/TSV | Out-of-range values |
+|---|---|---|---|
+| `native` (default) | nanosecond duration (`BIGINT`) | `10:10:10` | kept |
+| `text` | `10:10:10` (`VARCHAR`) | `10:10:10` | kept, e.g. `-01:30:00`, `25:00:00` |
+| `seconds` | `36610.0` (`DOUBLE`) | `36610` | kept |
+| `time` | `10:10:10` (`TIME`) | `10:10:10` | null |
+
 ## Related packages
 
 - [`sas7bdat-polars`](https://pypi.org/project/sas7bdat-polars/): a Polars plugin

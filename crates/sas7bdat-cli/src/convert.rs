@@ -33,6 +33,7 @@ impl ConvertArgs {
             parquet_target_bytes: self.output.parquet_target_bytes,
             parquet_metadata: self.output.parquet_metadata,
             parquet_metadata_additional: self.output.parquet_metadata_additional.clone(),
+            time_mode: self.output.time_mode.into(),
             delimiter: self.output.delimiter.map(|c| c as u8),
             no_header: self.output.no_header,
             skip: self.skip,
@@ -495,6 +496,7 @@ mod tests {
                 parquet_target_bytes: None,
                 parquet_metadata: false,
                 parquet_metadata_additional: None,
+                time_mode: crate::cli::TimeMode::Native,
             },
             execution: ExecutionOptions {
                 jobs,
@@ -568,6 +570,22 @@ mod tests {
 
         args.output.parquet_metadata_additional = None;
         assert_eq!(args.convert_options().parquet_metadata_additional, None);
+    }
+
+    #[test]
+    fn time_mode_reaches_the_convert_options() {
+        use crate::cli::TimeMode;
+        use sas7bdat_convert::TimeMode as Converter;
+        let mut args = args(None);
+        for (flag, expected) in [
+            (TimeMode::Native, Converter::Native),
+            (TimeMode::Text, Converter::Text),
+            (TimeMode::Seconds, Converter::Seconds),
+            (TimeMode::Time, Converter::Time),
+        ] {
+            args.output.time_mode = flag;
+            assert_eq!(args.convert_options().time_mode, expected, "{flag:?}");
+        }
     }
 
     /// A multi-minute conversion of one file has to show movement, which means the scan's byte

@@ -150,6 +150,22 @@ pub enum CompressionCodec {
     None,
 }
 
+/// How SAS TIME columns are written.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Default, ValueEnum)]
+pub enum TimeMode {
+    /// Parquet: a duration in nanoseconds (INT64 to readers that ignore the Arrow
+    /// schema). CSV/TSV: HH:MM:SS text. Keeps every value (default).
+    #[default]
+    Native,
+    /// HH:MM:SS[.fff] text in every format, sign and hours past 24 included.
+    Text,
+    /// The SAS value, seconds since midnight, as a floating-point number.
+    Seconds,
+    /// A clock time (Parquet TIME, microseconds); values outside 00:00:00-24:00:00
+    /// become null.
+    Time,
+}
+
 #[derive(Args, Clone)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct OutputOptions {
@@ -217,6 +233,14 @@ pub struct OutputOptions {
     /// string. Parquet output only.
     #[arg(long, value_name = "STRING", help_heading = "Output")]
     pub parquet_metadata_additional: Option<String>,
+
+    /// How SAS TIME columns are written.
+    ///
+    /// SAS stores a time as signed seconds since midnight with no upper bound, so a TIME
+    /// column can hold durations and negative offsets as well as clock times. Applies to
+    /// every output format; for CSV/TSV, `native` and `text` are the same.
+    #[arg(long, value_enum, default_value_t = TimeMode::Native, help_heading = "Output")]
+    pub time_mode: TimeMode,
 
     /// Parquet row group size, in rows.
     #[arg(
@@ -524,6 +548,17 @@ impl From<RecursionMode> for sas7bdat_convert::RecursionMode {
     }
 }
 
+impl From<TimeMode> for sas7bdat_convert::TimeMode {
+    fn from(value: TimeMode) -> Self {
+        match value {
+            TimeMode::Native => Self::Native,
+            TimeMode::Text => Self::Text,
+            TimeMode::Seconds => Self::Seconds,
+            TimeMode::Time => Self::Time,
+        }
+    }
+}
+
 impl From<CompressionCodec> for sas7bdat_convert::CompressionCodec {
     fn from(value: CompressionCodec) -> Self {
         match value {
@@ -549,7 +584,7 @@ impl ConvertArgs {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, CompressionCodec, ConvertCli, InspectCli, OutputOptions, SinkKind};
+    use super::{Cli, CompressionCodec, ConvertCli, InspectCli, OutputOptions, SinkKind, TimeMode};
     use clap::CommandFactory;
     use std::path::PathBuf;
 
@@ -574,6 +609,7 @@ mod tests {
             tmp_dir: None,
             parquet_metadata: false,
             parquet_metadata_additional: None,
+            time_mode: TimeMode::Native,
             parquet_row_group_size: None,
             parquet_target_bytes: None,
         }
