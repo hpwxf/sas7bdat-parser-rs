@@ -24,7 +24,7 @@ use crate::selection::{
     ColumnSelection, RowWindow, projection_from_selection, resolve_column_indices,
     row_selection_from_window,
 };
-use crate::{CompressionCodec, OutputLayout, SinkKind};
+use crate::{CompressionCodec, OutputLayout, SinkKind, TimeMode};
 use anyhow::{Result, anyhow};
 use rayon::prelude::*;
 use sas7bdat::{Dataset, IoBackendPreference, OpenOptions, ScanProgressObserver};
@@ -65,6 +65,11 @@ pub struct ConvertOptions {
     pub parquet_target_bytes: Option<usize>,
     /// Embed SAS labels, formats, kinds and widths in the Parquet key-value metadata.
     pub parquet_metadata: bool,
+    /// A string stored verbatim in the Parquet key-value metadata under
+    /// `sas7bdat.additional`, independently of `parquet_metadata`. Parquet only.
+    pub parquet_metadata_additional: Option<String>,
+    /// How SAS TIME columns are written, in every format.
+    pub time_mode: TimeMode,
     /// Delimiter for CSV/TSV. `None` uses the sink's default.
     pub delimiter: Option<u8>,
     /// Omit the header row from CSV/TSV.
@@ -97,6 +102,8 @@ impl Default for ConvertOptions {
             parquet_row_group_rows: None,
             parquet_target_bytes: None,
             parquet_metadata: false,
+            parquet_metadata_additional: None,
+            time_mode: TimeMode::Native,
             delimiter: None,
             no_header: false,
             skip: None,
@@ -296,6 +303,8 @@ fn write_output(
                     scan,
                     catalog,
                     embed_metadata: options.parquet_metadata,
+                    additional_metadata: options.parquet_metadata_additional.as_deref(),
+                    time_mode: options.time_mode,
                     compression: resolve_compression(options.compression),
                 },
             )
@@ -313,6 +322,7 @@ fn write_output(
                     }),
                 headers: !options.no_header,
                 scan,
+                time_mode: options.time_mode,
             },
         ),
     }

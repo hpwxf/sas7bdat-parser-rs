@@ -14,6 +14,10 @@ use serde::Serialize;
 /// Key under which the dataset metadata JSON is stored in Parquet file-level metadata.
 pub const PARQUET_METADATA_KEY: &str = "sas7bdat.metadata";
 
+/// Key under which a caller-supplied string is stored, verbatim, in Parquet file-level
+/// metadata (`convert --parquet-metadata-additional`).
+pub const PARQUET_ADDITIONAL_METADATA_KEY: &str = "sas7bdat.additional";
+
 /// JSON view of a single column's metadata.
 #[derive(Serialize)]
 pub struct ColumnMetaJson {

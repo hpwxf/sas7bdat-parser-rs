@@ -40,6 +40,35 @@ sas7bdat completions zsh           # shell completion script
 
 Run `sas7bdat <command> --help` for the full options of a command.
 
+### Metadata in the Parquet file
+
+Two opt-in flags of `convert` write entries into the Parquet file's key-value
+metadata, where plain Parquet readers can find them without the original file:
+
+- `--parquet-metadata` stores the SAS labels, formats, kinds and widths as JSON
+  under `sas7bdat.metadata`.
+- `--parquet-metadata-additional STRING` stores `STRING` as given, not parsed or
+  validated, under `sas7bdat.additional`: a small tag of your own, typically JSON.
+
+```sh
+sas7bdat convert sales.sas7bdat --out-dir out --parquet-metadata \
+  --parquet-metadata-additional '{"id": 101, "roles": ["admin", "editor"]}'
+duckdb -c "SELECT decode(key), decode(value) FROM parquet_kv_metadata('out/sales.parquet')"
+```
+
+### TIME columns
+
+SAS stores a time as signed seconds since midnight with no upper bound, so a TIME
+column can hold durations and negative offsets as well as clock times.
+`convert --time-mode` picks how such a column is written, in every format:
+
+| Mode | Parquet (as DuckDB reads it) | CSV/TSV | Out-of-range values |
+|---|---|---|---|
+| `native` (default) | nanosecond duration (`BIGINT`) | `10:10:10` | kept |
+| `text` | `10:10:10` (`VARCHAR`) | `10:10:10` | kept, e.g. `-01:30:00`, `25:00:00` |
+| `seconds` | `36610.0` (`DOUBLE`) | `36610` | kept |
+| `time` | `10:10:10` (`TIME`) | `10:10:10` | null |
+
 ## Related packages
 
 - [`sas7bdat-polars`](https://pypi.org/project/sas7bdat-polars/): a Polars plugin

@@ -32,6 +32,8 @@ impl ConvertArgs {
             parquet_row_group_rows: self.output.parquet_row_group_size,
             parquet_target_bytes: self.output.parquet_target_bytes,
             parquet_metadata: self.output.parquet_metadata,
+            parquet_metadata_additional: self.output.parquet_metadata_additional.clone(),
+            time_mode: self.output.time_mode.into(),
             delimiter: self.output.delimiter.map(|c| c as u8),
             no_header: self.output.no_header,
             skip: self.skip,
@@ -59,6 +61,11 @@ fn validate_convert_args(args: &ConvertArgs, discovered_inputs: usize) -> Result
     if matches!(args.output.effective_sink(), SinkKind::Parquet) && args.output.delimiter.is_some()
     {
         anyhow::bail!("--delimiter only applies to CSV/TSV output");
+    }
+    if !matches!(args.output.effective_sink(), SinkKind::Parquet)
+        && args.output.parquet_metadata_additional.is_some()
+    {
+        anyhow::bail!("--parquet-metadata-additional only applies to Parquet output");
     }
     Ok(())
 }
@@ -461,9 +468,10 @@ impl ProgressState {
 
 #[cfg(test)]
 mod tests {
-    use super::{ProgressState, failures_message, human_duration};
+    use super::{ProgressState, failures_message, human_duration, validate_convert_args};
     use crate::cli::{
-        ConvertArgs, ExecutionOptions, OutputOptions, ProgressMode, RecursionMode, UiOptions,
+        ConvertArgs, ExecutionOptions, OutputOptions, ProgressMode, RecursionMode, SinkKind,
+        UiOptions,
     };
     use sas7bdat::ScanProgress;
     use sas7bdat_convert::ConvertObserver;
@@ -487,6 +495,8 @@ mod tests {
                 parquet_row_group_size: None,
                 parquet_target_bytes: None,
                 parquet_metadata: false,
+                parquet_metadata_additional: None,
+                time_mode: crate::cli::TimeMode::Native,
             },
             execution: ExecutionOptions {
                 jobs,
@@ -507,6 +517,74 @@ mod tests {
             columns: None,
             column_indices: None,
             catalog: None,
+        }
+    }
+
+    fn with_additional(sink: Option<SinkKind>, out: Option<&str>) -> ConvertArgs {
+        let mut args = args(None);
+        args.output.sink = sink;
+        args.output.out = out.map(PathBuf::from);
+        args.output.parquet_metadata_additional = Some(r#"{"id": 101}"#.to_owned());
+        args
+    }
+
+    #[test]
+    fn parquet_metadata_additional_is_accepted_for_parquet() {
+        assert!(validate_convert_args(&with_additional(None, None), 1).is_ok());
+        assert!(validate_convert_args(&with_additional(Some(SinkKind::Parquet), None), 1).is_ok());
+    }
+
+    #[test]
+    fn parquet_metadata_additional_is_rejected_for_csv_and_tsv() {
+        for args in [
+            with_additional(Some(SinkKind::Csv), None),
+            with_additional(Some(SinkKind::Tsv), None),
+            with_additional(None, Some("out.csv")),
+        ] {
+            let err =
+                validate_convert_args(&args, 1).expect_err("CSV/TSV has no key-value metadata");
+            assert!(
+                err.to_string().contains("--parquet-metadata-additional"),
+                "unexpected error: {err}"
+            );
+        }
+    }
+
+    /// The flag only has an effect if `convert_options` hands it to the library, which
+    /// the library's own tests cannot see.
+    #[test]
+    fn parquet_metadata_additional_reaches_the_convert_options() {
+        let additional = r#"{"id": 101, "nom": "Élodie"}"#;
+        let mut args = args(None);
+        args.output.parquet_metadata_additional = Some(additional.to_owned());
+        assert_eq!(
+            args.convert_options()
+                .parquet_metadata_additional
+                .as_deref(),
+            Some(additional)
+        );
+        assert!(
+            !args.convert_options().parquet_metadata,
+            "the two flags are independent"
+        );
+
+        args.output.parquet_metadata_additional = None;
+        assert_eq!(args.convert_options().parquet_metadata_additional, None);
+    }
+
+    #[test]
+    fn time_mode_reaches_the_convert_options() {
+        use crate::cli::TimeMode;
+        use sas7bdat_convert::TimeMode as Converter;
+        let mut args = args(None);
+        for (flag, expected) in [
+            (TimeMode::Native, Converter::Native),
+            (TimeMode::Text, Converter::Text),
+            (TimeMode::Seconds, Converter::Seconds),
+            (TimeMode::Time, Converter::Time),
+        ] {
+            args.output.time_mode = flag;
+            assert_eq!(args.convert_options().time_mode, expected, "{flag:?}");
         }
     }
 
