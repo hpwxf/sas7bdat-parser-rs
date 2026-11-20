@@ -106,7 +106,7 @@ pub fn write_sas_time(out: &mut String, seconds: f64) {
 /// matches the microsecond computation the Parquet/Polars paths use. The SAS range fits
 /// `i64` microseconds comfortably (year 9999 ≈ 2.5e17 µs « `i64::MAX`).
 #[allow(clippy::cast_possible_truncation)]
-fn microseconds(seconds: f64) -> i64 {
+pub(crate) fn microseconds(seconds: f64) -> i64 {
     (seconds * 1_000_000.0).round() as i64
 }
 

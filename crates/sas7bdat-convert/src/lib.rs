@@ -21,6 +21,7 @@ pub mod parquet_pipeline;
 pub mod paths;
 pub mod sas_metadata;
 pub mod selection;
+pub mod time_mode;
 pub mod values;
 
 pub use driver::{
@@ -56,6 +57,29 @@ pub enum RecursionMode {
     #[default]
     Recursive,
     Never,
+}
+
+/// How a SAS TIME column is written.
+///
+/// SAS stores a time as signed seconds since midnight, with no bound: an elapsed duration or
+/// a negative offset is as valid as a clock time. The default keeps every value; the other
+/// modes trade that for a type a given reader handles better. A column counts as TIME when
+/// SAS declared it with a time format.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Default)]
+pub enum TimeMode {
+    /// As each format writes it today: Arrow `Duration(Nanosecond)` in Parquet (a bare
+    /// `INT64` to readers that ignore the Arrow schema), `HH:MM:SS` text in CSV/TSV.
+    #[default]
+    Native,
+    /// `HH:MM:SS[.fff]` text in every format, the CSV rendering: sign and hours past 24
+    /// are kept.
+    Text,
+    /// The SAS value itself, seconds since midnight, as a `DOUBLE` (`Float64`).
+    Seconds,
+    /// A clock time: Parquet `TIME` in microseconds (Arrow `Time64(Microsecond)`), which
+    /// readers such as DuckDB load as `TIME`. A value outside `[00:00:00, 24:00:00)` has no
+    /// such representation and is written as null.
+    Time,
 }
 
 /// Parquet compression codec. Zstd by default: a strong size win over uncompressed

@@ -1,6 +1,6 @@
-use crate::CompressionCodec;
 use crate::catalog::{Catalog, LabelSet};
 use crate::sas_metadata::{DatasetMetaJson, PARQUET_ADDITIONAL_METADATA_KEY, PARQUET_METADATA_KEY};
+use crate::{CompressionCodec, TimeMode};
 use anyhow::Result;
 use arrow_schema::{DataType, Field, Fields, Schema, SchemaRef};
 use chrono::{Duration, NaiveDate, NaiveDateTime};
@@ -297,6 +297,8 @@ pub struct WriteOptions<'a> {
     /// A string stored verbatim in the Parquet file's key-value metadata under
     /// `sas7bdat.additional`. Not parsed or validated: the caller owns its content.
     pub additional_metadata: Option<&'a str>,
+    /// How SAS TIME columns are written.
+    pub time_mode: TimeMode,
     /// Compression codec for the written Parquet data.
     pub compression: Compression,
 }
@@ -318,6 +320,7 @@ impl WriteOptions<'_> {
             catalog: None,
             embed_metadata: false,
             additional_metadata: None,
+            time_mode: TimeMode::Native,
             compression: Compression::UNCOMPRESSED,
         }
     }
@@ -334,6 +337,8 @@ pub struct DelimitedWriteOptions<'a> {
     pub delimiter: u8,
     pub headers: bool,
     pub scan: ScanOptions<'a>,
+    /// How SAS TIME columns are written.
+    pub time_mode: TimeMode,
 }
 
 /// # Errors
@@ -352,12 +357,15 @@ pub fn write_parquet(dataset: &Dataset, output: &Path, options: WriteOptions<'_>
     if let Some(rows) = options.batch_rows {
         scan = scan.with_batch_hint(BatchHint::Rows(rows.max(1)));
     }
-    let schema = apply_catalog_metadata(
-        scan.arrow_schema()?,
-        dataset,
-        options.catalog,
-        options.scan.projection,
-    )?;
+    let schema = crate::time_mode::output_schema(
+        apply_catalog_metadata(
+            scan.arrow_schema()?,
+            dataset,
+            options.catalog,
+            options.scan.projection,
+        )?,
+        options.time_mode,
+    );
     let row_group_rows = options
         .row_group_rows
         .unwrap_or_else(|| default_row_group_rows(dataset.metadata().row_count))
@@ -402,7 +410,8 @@ pub fn write_parquet(dataset: &Dataset, output: &Path, options: WriteOptions<'_>
             row_group_rows,
             options.scan.parse_threads,
             options.encode_in_flight_bytes,
-        )?;
+        )?
+        .with_time_mode(options.time_mode);
         // No Arrow conversion here on purpose. This closure runs on the scan's collector
         // thread -- the single thread that sees every batch in file order -- so work placed
         // here is serial however wide the rest of the pipeline is. The conversion happens
@@ -422,7 +431,7 @@ pub fn write_parquet(dataset: &Dataset, output: &Path, options: WriteOptions<'_>
     // a time. The owned path streams extents through the parallel decoder and converts here,
     // which is the same Arrow conversion `visit_arrow_batches` does.
     let stats = scan.visit_owned_batches(|batch| {
-        let record_batch = batch.into_arrow_record_batch(SchemaRef::clone(&batch_schema))?;
+        let record_batch = crate::time_mode::record_batch(batch, &batch_schema, options.time_mode)?;
         writer
             .write(&record_batch)
             .map_err(|err| Error::arrow(err.to_string()))?;
@@ -526,6 +535,7 @@ pub fn write_csv_or_tsv(
         .transpose()?;
     let (date_epoch, datetime_epoch) = sas_epochs();
     let delimiter = options.delimiter;
+    let time_mode = options.time_mode;
     let stats = scan.visit_owned_batches(|batch| {
         let rows = batch.row_count;
         let format_chunk = |range: std::ops::Range<usize>| -> csv::Result<Vec<u8>> {
@@ -541,7 +551,11 @@ pub fn write_csv_or_tsv(
                         .get(index)
                         .copied()
                         .unwrap_or(LogicalType::Float);
-                    let cell = batch_cell(column, texts[index], row, kind);
+                    let mut cell = batch_cell(column, texts[index], row, kind);
+                    let mut kind = kind;
+                    if kind == LogicalType::Time {
+                        (cell, kind) = crate::time_mode::delimited_cell(cell, time_mode);
+                    }
                     write_cell_field(
                         &mut chunk,
                         &mut scratch,

@@ -23,6 +23,7 @@
 //! Row groups reach the file in the order they were filled. Encoding finishes out of order, so
 //! completed ones wait in a small reorder buffer.
 
+use crate::TimeMode;
 use anyhow::{Result, anyhow};
 use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Schema, SchemaRef};
@@ -174,6 +175,8 @@ pub struct RowGroupPipeline<W: Write + Send> {
     factory: ArrowRowGroupWriterFactory,
     pool: &'static rayon::ThreadPool,
     schema: SchemaRef,
+    /// How TIME columns are converted; `schema` must already be retyped for it.
+    time_mode: TimeMode,
     sizer: RowGroupSizer,
 
     /// Batches for the row group currently being filled, still in the scanner's own
@@ -216,6 +219,7 @@ impl<W: Write + Send> RowGroupPipeline<W> {
             factory,
             pool,
             schema,
+            time_mode: TimeMode::Native,
             sizer: RowGroupSizer::new(target_rows),
             pending: Vec::new(),
             pending_rows: 0,
@@ -232,6 +236,14 @@ impl<W: Write + Send> RowGroupPipeline<W> {
             tx,
             rx,
         })
+    }
+
+    /// Convert TIME columns under `mode`. The pipeline's schema must be the one
+    /// [`time_mode::output_schema`](crate::time_mode::output_schema) returns for it.
+    #[must_use]
+    pub const fn with_time_mode(mut self, mode: TimeMode) -> Self {
+        self.time_mode = mode;
+        self
     }
 
     /// # Errors
@@ -300,13 +312,14 @@ impl<W: Write + Send> RowGroupPipeline<W> {
         }
 
         let schema = SchemaRef::clone(&self.schema);
+        let time_mode = self.time_mode;
         let tx = self.tx.clone();
         self.pool.spawn(move || {
             // The Arrow conversion runs here, on a pool thread, rather than on the thread
             // that called `push`. That caller is the scan's collector: it is the one thread
             // that sees every batch in order, so anything done there is serial no matter how
             // many cores the rest of the pipeline has.
-            let chunks = convert_batches(&schema, batches)
+            let chunks = convert_batches(&schema, batches, time_mode)
                 .and_then(|converted| encode_row_group(&schema, writers, &converted));
             // The receiver outlives every task it dispatched, so this only fails if the
             // pipeline was already torn down by an earlier error.
@@ -381,12 +394,12 @@ impl<W: Write + Send> RowGroupPipeline<W> {
 fn convert_batches(
     schema: &SchemaRef,
     batches: Vec<OwnedColumnarBatch>,
+    time_mode: TimeMode,
 ) -> Result<Vec<RecordBatch>, ParquetError> {
     batches
         .into_par_iter()
         .map(|batch| {
-            batch
-                .into_arrow_record_batch(SchemaRef::clone(schema))
+            crate::time_mode::record_batch(batch, schema, time_mode)
                 .map_err(|err| ParquetError::General(err.to_string()))
         })
         .collect()
